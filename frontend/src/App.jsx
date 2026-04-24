@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Busqueda from './pages/Busqueda';
+import Recepcion from './pages/Recepcion';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
@@ -22,6 +23,7 @@ function AppRoutes() {
       <Route path="/login" element={usuario ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/" element={<RutaProtegida><Dashboard /></RutaProtegida>} />
       <Route path="/busqueda" element={<RutaProtegida><Busqueda /></RutaProtegida>} />
+      <Route path="/recepcion" element={<RutaProtegida><Recepcion /></RutaProtegida>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
