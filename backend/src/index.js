@@ -14,6 +14,7 @@ const recepcionesRoutes = require('./routes/recepciones');
 const despachosRoutes = require('./routes/despachos');
 const verificacionesRoutes = require('./routes/verificaciones');
 const conteosRoutes = require('./routes/conteos');
+const auditoriasRoutes = require('./routes/auditorias');
 
 const app = express();
 
@@ -61,6 +62,7 @@ app.use('/api/recepciones', recepcionesRoutes);
 app.use('/api/despachos', despachosRoutes);
 app.use('/api/verificaciones', verificacionesRoutes);
 app.use('/api/conteos', conteosRoutes);
+app.use('/api/auditorias', auditoriasRoutes);
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
