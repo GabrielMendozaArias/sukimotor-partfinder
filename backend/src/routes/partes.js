@@ -84,8 +84,8 @@ router.post('/', verificarToken, soloJefe, async (req, res) => {
   res.status(201).json({ parte });
 });
 
-// PATCH /api/partes/:id — actualizar parte (solo Jefe)
-router.patch('/:id', verificarToken, soloJefe, async (req, res) => {
+// PATCH /api/partes/:id — actualizar parte (Jefe y Operario)
+router.patch('/:id', verificarToken, async (req, res) => {
   const { descripcion, marca_id, activo } = req.body;
 
   const { data, error } = await supabase
