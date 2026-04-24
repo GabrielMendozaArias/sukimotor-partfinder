@@ -8,6 +8,7 @@ import Busqueda from './pages/Busqueda';
 import Recepcion from './pages/Recepcion';
 import Despacho from './pages/Despacho';
 import Verificacion from './pages/Verificacion';
+import Conteo from './pages/Conteo';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30000 } }
@@ -28,6 +29,7 @@ function AppRoutes() {
       <Route path="/recepcion" element={<RutaProtegida><Recepcion /></RutaProtegida>} />
       <Route path="/despacho" element={<RutaProtegida><Despacho /></RutaProtegida>} />
       <Route path="/verificacion" element={<RutaProtegida><Verificacion /></RutaProtegida>} />
+      <Route path="/conteo" element={<RutaProtegida><Conteo /></RutaProtegida>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
