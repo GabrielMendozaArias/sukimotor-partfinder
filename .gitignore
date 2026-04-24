@@ -1,0 +1,48 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (NUNCA subir al repo)
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+
+# Archivos de configuración local
+.clasp.json
+.clasprc.json
+
+# Secretos y configuraciones sensibles
+secrets/
+*.key
+*.pem
+*.p12
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Carpetas de build/dist
+dist/
+build/
+.next/
+out/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Temporales
+*.tmp
+*.temp
+~$*
