@@ -1,3 +1,4 @@
+// En local carga .env desde la raíz del proyecto; en Railway las vars vienen del entorno
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
 const express = require('express');
