@@ -2,37 +2,28 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
-const { verificarToken } = require('../middleware/auth');
+const { verificarToken, soloJefe } = require('../middleware/auth');
 
 const router = express.Router();
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
   const { email, pin } = req.body;
+  if (!email || !pin) return res.status(400).json({ error: 'Email y PIN requeridos' });
 
-  if (!email || !pin) {
-    return res.status(400).json({ error: 'Email y PIN requeridos' });
-  }
-
-  const { data: usuario, error } = await supabase
+  const { data: usuario } = await supabase
     .from('usuarios')
-    .select('id, email, nombre, rol, pin_hash, pin_salt, activo')
+    .select('id, email, nombre, rol, pin_hash, activo')
     .eq('email', email.toLowerCase().trim())
-    .eq('activo', true)
     .single();
 
-  if (error || !usuario) {
+  if (!usuario || !usuario.activo) {
     return res.status(401).json({ error: 'Credenciales inválidas' });
   }
 
-  const pinValido = await bcrypt.compare(pin + usuario.pin_salt, usuario.pin_hash);
+  const pinValido = await bcrypt.compare(pin.toString(), usuario.pin_hash);
   if (!pinValido) {
-    await supabase.from('log_sesiones').insert({
-      usuario_id: usuario.id,
-      email: usuario.email,
-      accion: 'LOGIN_FALLIDO',
-      ip_address: req.ip
-    });
+    await supabase.from('log_sesiones').insert({ usuario_id: usuario.id, email: usuario.email, accion: 'LOGIN_FALLIDO', ip_address: req.ip });
     return res.status(401).json({ error: 'Credenciales inválidas' });
   }
 
@@ -42,33 +33,91 @@ router.post('/login', async (req, res) => {
     { expiresIn: '8h' }
   );
 
-  await supabase.from('log_sesiones').insert({
-    usuario_id: usuario.id,
-    email: usuario.email,
-    accion: 'LOGIN',
-    ip_address: req.ip
-  });
+  await supabase.from('log_sesiones').insert({ usuario_id: usuario.id, email: usuario.email, accion: 'LOGIN', ip_address: req.ip });
 
-  res.json({
-    token,
-    usuario: { id: usuario.id, email: usuario.email, nombre: usuario.nombre, rol: usuario.rol }
-  });
+  res.json({ token, usuario: { id: usuario.id, email: usuario.email, nombre: usuario.nombre, rol: usuario.rol } });
 });
 
 // POST /api/auth/logout
 router.post('/logout', verificarToken, async (req, res) => {
-  await supabase.from('log_sesiones').insert({
-    usuario_id: req.usuario.id,
-    email: req.usuario.email,
-    accion: 'LOGOUT',
-    ip_address: req.ip
-  });
+  await supabase.from('log_sesiones').insert({ usuario_id: req.usuario.id, email: req.usuario.email, accion: 'LOGOUT', ip_address: req.ip });
   res.json({ success: true });
 });
 
 // GET /api/auth/me
 router.get('/me', verificarToken, (req, res) => {
   res.json({ usuario: req.usuario });
+});
+
+// GET /api/auth/usuarios — listar usuarios (solo Jefe)
+router.get('/usuarios', verificarToken, soloJefe, async (req, res) => {
+  const { data, error } = await supabase
+    .from('usuarios')
+    .select('id, email, nombre, rol, activo, created_at')
+    .order('created_at');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ usuarios: data });
+});
+
+// POST /api/auth/usuarios — crear usuario (solo Jefe)
+router.post('/usuarios', verificarToken, soloJefe, async (req, res) => {
+  const { email, nombre, pin, rol } = req.body;
+  if (!email || !pin || !rol) return res.status(400).json({ error: 'Email, PIN y rol requeridos' });
+  if (!['Jefe', 'Operario'].includes(rol)) return res.status(400).json({ error: 'Rol inválido' });
+
+  const pin_hash = await bcrypt.hash(pin.toString(), 10);
+
+  const { data, error } = await supabase
+    .from('usuarios')
+    .insert({ email: email.toLowerCase().trim(), nombre: nombre?.trim(), rol, pin_hash, pin_salt: '', activo: true })
+    .select('id, email, nombre, rol, activo')
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message.includes('unique') ? 'El email ya existe' : error.message });
+  res.status(201).json({ usuario: data });
+});
+
+// PATCH /api/auth/usuarios/:id — actualizar PIN o datos (solo Jefe)
+router.patch('/usuarios/:id', verificarToken, soloJefe, async (req, res) => {
+  const { nombre, pin, rol, activo } = req.body;
+  const updates = {};
+
+  if (nombre !== undefined) updates.nombre = nombre.trim();
+  if (rol !== undefined) {
+    if (!['Jefe', 'Operario'].includes(rol)) return res.status(400).json({ error: 'Rol inválido' });
+    updates.rol = rol;
+  }
+  if (activo !== undefined) updates.activo = activo;
+  if (pin !== undefined) updates.pin_hash = await bcrypt.hash(pin.toString(), 10);
+
+  const { data, error } = await supabase
+    .from('usuarios')
+    .update(updates)
+    .eq('id', req.params.id)
+    .select('id, email, nombre, rol, activo')
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ usuario: data });
+});
+
+// POST /api/auth/setup — crear primer admin si no hay usuarios
+router.post('/setup', async (req, res) => {
+  const { count } = await supabase.from('usuarios').select('*', { count: 'exact', head: true });
+  if (count > 0) return res.status(403).json({ error: 'El sistema ya tiene usuarios configurados' });
+
+  const { email, nombre, pin } = req.body;
+  if (!email || !pin) return res.status(400).json({ error: 'Email y PIN requeridos' });
+
+  const pin_hash = await bcrypt.hash(pin.toString(), 10);
+  const { data, error } = await supabase
+    .from('usuarios')
+    .insert({ email: email.toLowerCase().trim(), nombre: nombre?.trim() || 'Administrador', rol: 'Jefe', pin_hash, pin_salt: '', activo: true })
+    .select('id, email, nombre, rol')
+    .single();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json({ mensaje: 'Administrador creado', usuario: data });
 });
 
 module.exports = router;

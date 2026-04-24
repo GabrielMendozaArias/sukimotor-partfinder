@@ -9,6 +9,7 @@ const modulos = [
   { id: 'verificacion',  label: 'Verificación',  emoji: '✅', ruta: '/verificacion',  roles: ['Jefe', 'Operario'] },
   { id: 'conteo',        label: 'Conteo Físico', emoji: '🔢', ruta: '/conteo',        roles: ['Jefe', 'Operario'] },
   { id: 'auditoria',     label: 'Auditoría',     emoji: '📋', ruta: '/auditoria',     roles: ['Jefe'] },
+  { id: 'usuarios',      label: 'Usuarios',      emoji: '👥', ruta: '/usuarios',      roles: ['Jefe'] },
 ];
 
 export default function Dashboard() {
