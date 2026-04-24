@@ -1,6 +1,6 @@
 const express = require('express');
 const supabase = require('../config/supabase');
-const { verificarToken, soloJefe } = require('../middleware/auth');
+const { verificarToken } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -55,8 +55,8 @@ router.get('/:codigo', verificarToken, async (req, res) => {
   res.json({ parte: data });
 });
 
-// POST /api/partes — crear nueva parte (solo Jefe)
-router.post('/', verificarToken, soloJefe, async (req, res) => {
+// POST /api/partes — crear nueva parte (Jefe y Operario)
+router.post('/', verificarToken, async (req, res) => {
   const { codigo, descripcion, marca_id, ubicaciones } = req.body;
 
   if (!codigo) return res.status(400).json({ error: 'Código requerido' });
