@@ -219,6 +219,7 @@ CREATE INDEX idx_conteos_estado          ON conteos(estado);
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- ============================================================
+ALTER TABLE marcas            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usuarios          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE log_sesiones      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE partes            ENABLE ROW LEVEL SECURITY;
@@ -233,6 +234,11 @@ ALTER TABLE verificacion_detalles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auditorias        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conteos           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE detalles_conteo   ENABLE ROW LEVEL SECURITY;
+
+-- Política: marcas son de solo lectura para todos los autenticados
+CREATE POLICY "autenticados_leen_marcas"
+  ON marcas FOR SELECT
+  USING (auth.role() = 'authenticated');
 
 -- Política: usuarios autenticados pueden leer inventario y ubicaciones
 CREATE POLICY "autenticados_leen_partes"
