@@ -11,6 +11,7 @@ const authRoutes = require('./routes/auth');
 const partesRoutes = require('./routes/partes');
 const geminiRoutes = require('./routes/gemini');
 const recepcionesRoutes = require('./routes/recepciones');
+const despachosRoutes = require('./routes/despachos');
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/partes', partesRoutes);
 app.use('/api/gemini', geminiRoutes);
 app.use('/api/recepciones', recepcionesRoutes);
+app.use('/api/despachos', despachosRoutes);
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
