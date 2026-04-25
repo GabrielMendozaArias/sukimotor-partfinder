@@ -12,7 +12,7 @@ router.get('/', verificarToken, async (req, res) => {
     .from('partes')
     .select(`
       id, codigo, codigo_limpio, descripcion, activo,
-      gemini_descripcion, gemini_cached_at,
+      gemini_descripcion, gemini_cached_at, updated_at,
       marca:marcas(id, nombre),
       ubicaciones:parte_ubicaciones(
         orden, cantidad,
@@ -41,7 +41,7 @@ router.get('/:codigo', verificarToken, async (req, res) => {
     .from('partes')
     .select(`
       id, codigo, codigo_limpio, descripcion, activo,
-      gemini_descripcion, gemini_cached_at,
+      gemini_descripcion, gemini_cached_at, updated_at,
       marca:marcas(id, nombre),
       ubicaciones:parte_ubicaciones(
         orden, cantidad,

@@ -24,6 +24,9 @@ async function gasFetch(path, method = 'GET', body = null) {
 function gasConvertirParte(p) {
   if (!p) return null;
   const ubics = (p.ubicaciones || []).sort((a, b) => a.orden - b.orden);
+  const ultimoInv = p.updated_at
+    ? new Date(p.updated_at).toLocaleDateString('es-PA')
+    : (p.gemini_cached_at ? new Date(p.gemini_cached_at).toLocaleDateString('es-PA') : '');
   return {
     'Código': p.codigo || '',
     'Descripción': p.gemini_descripcion || p.descripcion || '',
@@ -33,6 +36,7 @@ function gasConvertirParte(p) {
     'Ubicación 3': ubics[2]?.ubicacion?.codigo_ubicacion || '',
     'Ubicación 4': ubics[3]?.ubicacion?.codigo_ubicacion || '',
     'Ubicación 5': ubics[4]?.ubicacion?.codigo_ubicacion || '',
+    'Último Inventario': ultimoInv,
   };
 }
 
@@ -118,7 +122,11 @@ class GASRunner {
   escanearCodigoRecepcion(codigo) { this.buscarCodigo(codigo); }
 
   buscarPorUbicacion(ubicacion) {
-    this._exec(gasFetch(`/api/compat/ubicacion/${encodeURIComponent(ubicacion)}`).then(data => data));
+    this._exec(gasFetch(`/api/compat/ubicacion/${encodeURIComponent(ubicacion)}`).then(data => ({
+      ...data,
+      ubicacionOriginal: ubicacion,        // para mostrar normalización en UI
+      ubicacion: data.ubicacion || ubicacion
+    })));
   }
 
   filtrarUbicaciones(filtros) {
@@ -174,6 +182,18 @@ class GASRunner {
   // ── VERIFICACIÓN ─────────────────────────────────────
   marcarCodigoVerificacion(codigo, accion) {
     this._exec(gasFetch('/api/compat/verificar-codigo', 'POST', { codigo, accion }).then(data => data));
+  }
+
+  verificarSiIntrusoEsValido(ubicacion, codigo) {
+    this._exec(gasFetch('/api/compat/verificar-si-intruso-valido', 'POST', { ubicacion, codigo })
+      .then(data => data)
+      .catch(() => ({ esValidado: false })));
+  }
+
+  validarIntruso(ubicacion, codigo, accion, email) {
+    this._exec(gasFetch('/api/compat/validar-intruso', 'POST', { ubicacion, codigo, accion, email })
+      .then(data => data)
+      .catch(err => ({ success: false, message: err.message })));
   }
 
   guardarVerificacion(datos) {
@@ -239,6 +259,13 @@ class GASRunner {
 
   guardarConteoReferencia(datos) {
     this._exec(gasFetch('/api/compat/guardar-conteo', 'POST', datos).then(data => data));
+  }
+
+  // ── PROCESAMIENTO DE IMAGEN DE ORDEN (DESPACHO) ──────
+  procesarImagenOrden(base64Image) {
+    this._exec(gasFetch('/api/compat/procesar-imagen-orden', 'POST', { imagen: base64Image })
+      .then(data => data)
+      .catch(err => ({ success: false, error: err.message, items: [] })));
   }
 
   // ── GEMINI AI ─────────────────────────────────────────

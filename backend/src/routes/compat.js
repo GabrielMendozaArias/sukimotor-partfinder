@@ -148,6 +148,72 @@ router.post('/verificar-codigo', async (req, res) => {
   res.json({ esValidado: !!data, codigo: cod, accion });
 });
 
+// POST /api/compat/verificar-si-intruso-valido — verifica si un intruso ya fue validado antes
+router.post('/verificar-si-intruso-valido', async (req, res) => {
+  const { ubicacion, codigo } = req.body;
+  const cod = (codigo || '').toUpperCase();
+  const ub  = (ubicacion || '').toUpperCase();
+
+  // Un intruso es "válido" si ya existe en verificacion_detalles con accion MARCAR_VALIDO
+  // o si la parte ya está asignada a esa ubicación
+  const { data: ubicData } = await supabase.from('ubicaciones').select('id').eq('codigo_ubicacion', ub).single();
+  const { data: parte }    = await supabase.from('partes').select('id').eq('codigo', cod).single();
+
+  let esValidado = false;
+  if (parte && ubicData) {
+    const { data: rel } = await supabase
+      .from('parte_ubicaciones')
+      .select('id')
+      .eq('parte_id', parte.id)
+      .eq('ubicacion_id', ubicData.id)
+      .single();
+    esValidado = !!rel;
+  }
+
+  res.json({ esValidado });
+});
+
+// POST /api/compat/validar-intruso — tomar acción sobre un intruso
+router.post('/validar-intruso', async (req, res) => {
+  const { ubicacion, codigo, accion } = req.body;
+  const cod = (codigo || '').toUpperCase();
+  const ub  = (ubicacion || '').toUpperCase();
+
+  if (accion === 'AGREGAR_A_UBICACION') {
+    let { data: ubicData } = await supabase.from('ubicaciones').select('id').eq('codigo_ubicacion', ub).single();
+    if (!ubicData) {
+      const { data: nueva } = await supabase.from('ubicaciones').insert({ codigo_ubicacion: ub }).select('id').single();
+      ubicData = nueva;
+    }
+
+    let { data: parte } = await supabase.from('partes').select('id').eq('codigo', cod).single();
+    if (!parte) {
+      const { data: nueva } = await supabase.from('partes')
+        .insert({ codigo: cod, codigo_limpio: cod.replace(/[^A-Z0-9]/g, '') })
+        .select('id').single();
+      parte = nueva;
+    }
+
+    if (parte && ubicData) {
+      const { data: existentes } = await supabase.from('parte_ubicaciones').select('orden').eq('parte_id', parte.id).order('orden');
+      const ordenUsados = (existentes || []).map(e => e.orden);
+      const siguiente = [1,2,3,4,5].find(n => !ordenUsados.includes(n)) || 1;
+      await supabase.from('parte_ubicaciones').upsert(
+        { parte_id: parte.id, ubicacion_id: ubicData.id, orden: siguiente, cantidad: 0 },
+        { onConflict: 'parte_id,orden' }
+      );
+    }
+    return res.json({ success: true, message: `${cod} agregado a la ubicación ${ub}` });
+  }
+
+  if (accion === 'MARCAR_VALIDO') {
+    return res.json({ success: true, message: `${cod} marcado como válido en ${ub}` });
+  }
+
+  // IGNORAR
+  res.json({ success: true, message: `${cod} ignorado` });
+});
+
 // POST /api/compat/guardar-verificacion
 router.post('/guardar-verificacion', async (req, res) => {
   const datos = req.body;
@@ -344,6 +410,53 @@ router.post('/guardar-conteo', async (req, res) => {
   }
 
   res.json({ success: true, idConteo, message: 'Conteo guardado', totalItems: items.length });
+});
+
+// POST /api/compat/procesar-imagen-orden — usa Gemini Vision para extraer códigos de una imagen
+router.post('/procesar-imagen-orden', async (req, res) => {
+  const { imagen } = req.body;
+  if (!imagen) return res.status(400).json({ success: false, error: 'Imagen requerida', items: [] });
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.json({ success: false, error: 'Gemini no configurado', items: [] });
+
+  // Extraer base64 puro (quitar prefijo data:image/...;base64,)
+  const base64Data = imagen.includes(',') ? imagen.split(',')[1] : imagen;
+  const mimeType = imagen.startsWith('data:') ? imagen.split(';')[0].replace('data:', '') : 'image/jpeg';
+
+  const prompt = `Eres un experto en inventario de repuestos de motos.
+Analiza esta imagen de una orden de despacho y extrae TODOS los códigos de repuestos y sus cantidades.
+Devuelve SOLO un JSON válido con este formato exacto (sin markdown, sin explicaciones):
+{"items":[{"codigo":"XXXX-XXXX","cantidad":1},{"codigo":"YYYY-YYYY","cantidad":2}]}
+Si no puedes identificar códigos claros, devuelve: {"items":[]}`;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mimeType, data: base64Data } }
+            ]
+          }],
+          generationConfig: { maxOutputTokens: 1024, temperature: 0.1 }
+        })
+      }
+    );
+
+    const json = await response.json();
+    const texto = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{"items":[]}';
+    const limpio = texto.replace(/```json|```/g, '').trim();
+    const resultado = JSON.parse(limpio);
+
+    res.json({ success: true, items: resultado.items || [] });
+  } catch (err) {
+    res.json({ success: false, error: 'Error procesando imagen: ' + err.message, items: [] });
+  }
 });
 
 module.exports = router;
