@@ -6,6 +6,7 @@ const router = express.Router();
 router.use(verificarToken);
 
 function convertirParte(p) {
+  if (!p) return null;
   const ubics = (p.parte_ubicaciones || []).sort((a, b) => a.orden - b.orden);
   return {
     'Código': p.codigo || '',

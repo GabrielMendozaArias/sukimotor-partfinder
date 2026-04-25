@@ -300,8 +300,9 @@ class GASRunner {
   }
 }
 
-// Exponer como global — reemplaza el objeto de Google
-const google = {
+// Exponer como window.google para que los scripts inline del HTML puedan encontrarlo
+// IMPORTANTE: "const google" NO crea window.google — hay que asignar explícitamente
+window.google = {
   script: {
     get run() { return new GASRunner(); }
   }
