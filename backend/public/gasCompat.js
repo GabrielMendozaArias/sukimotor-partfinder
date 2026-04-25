@@ -76,9 +76,9 @@ class GASRunner {
       return {
         success: true,
         email: data.usuario.email,
-        rol: data.usuario.rol,
+        rol: data.usuario.rol,          // 'Admin' o 'Almacenista'
         nombre: data.usuario.nombre,
-        permisos: { puedeEditar: true, puedeVerificar: true, puedeRecibir: true, puedeDespachar: true },
+        permisos: data.usuario.permisos || {},
         sessionId: data.token
       };
     }).catch(err => ({ success: false, message: err.message })));
@@ -91,7 +91,7 @@ class GASRunner {
         email: data.usuario.email,
         rol: data.usuario.rol,
         nombre: data.usuario.nombre,
-        permisos: { puedeEditar: true, puedeVerificar: true, puedeRecibir: true, puedeDespachar: true }
+        permisos: data.usuario.permisos || {}
       }
     })).catch(() => ({ success: false, requireLogin: true, message: 'Sesión expirada' })));
   }

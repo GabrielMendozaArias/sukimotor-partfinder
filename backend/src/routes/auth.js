@@ -13,7 +13,7 @@ router.post('/login', async (req, res) => {
 
   const { data: usuario } = await supabase
     .from('usuarios')
-    .select('id, email, nombre, rol, pin_hash, activo')
+    .select('id, email, nombre, rol, pin_hash, activo, permisos')
     .eq('email', email.toLowerCase().trim())
     .single();
 
@@ -35,7 +35,19 @@ router.post('/login', async (req, res) => {
 
   await supabase.from('log_sesiones').insert({ usuario_id: usuario.id, email: usuario.email, accion: 'LOGIN', ip_address: req.ip });
 
-  res.json({ token, usuario: { id: usuario.id, email: usuario.email, nombre: usuario.nombre, rol: usuario.rol } });
+  // Mapear rol interno a rol original del sistema
+  const rolFrontend = usuario.rol === 'Jefe' ? 'Admin' : 'Almacenista';
+
+  res.json({
+    token,
+    usuario: {
+      id: usuario.id,
+      email: usuario.email,
+      nombre: usuario.nombre,
+      rol: rolFrontend,
+      permisos: usuario.permisos || {}
+    }
+  });
 });
 
 // POST /api/auth/logout
@@ -45,8 +57,17 @@ router.post('/logout', verificarToken, async (req, res) => {
 });
 
 // GET /api/auth/me
-router.get('/me', verificarToken, (req, res) => {
-  res.json({ usuario: req.usuario });
+router.get('/me', verificarToken, async (req, res) => {
+  const { data } = await supabase
+    .from('usuarios')
+    .select('id, email, nombre, rol, permisos')
+    .eq('id', req.usuario.id)
+    .single();
+
+  if (!data) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+  const rolFrontend = data.rol === 'Jefe' ? 'Admin' : 'Almacenista';
+  res.json({ usuario: { ...data, rol: rolFrontend } });
 });
 
 // GET /api/auth/usuarios — listar usuarios (solo Jefe)
