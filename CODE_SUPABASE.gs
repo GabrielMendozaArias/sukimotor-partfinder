@@ -767,43 +767,59 @@ function procesarImagenOrden(imagenBase64) {
     const b64    = imagenBase64.includes(',') ? imagenBase64.split(',')[1] : imagenBase64;
     const mime   = imagenBase64.startsWith('data:') ? imagenBase64.split(';')[0].replace('data:','') : 'image/jpeg';
 
-    const prompt = 'Analiza esta imagen de una orden o lista de repuestos de motos. ' +
-      'Extrae los codigos de repuesto y cantidades. ' +
-      'Responde UNICAMENTE con JSON valido sin markdown: ' +
-      '{"items":[{"codigo":"18137-93J01","cantidad":2}]} ' +
-      'Si no hay codigos claros responde: {"items":[]}';
+    const prompt =
+      'Eres un asistente de almacen de repuestos de motos. ' +
+      'Mira esta imagen y extrae TODOS los codigos de repuesto que veas (columna Codigo o similar). ' +
+      'Si no hay cantidad visible, usa 1. ' +
+      'Responde SOLO con este JSON sin ningun texto adicional ni markdown: ' +
+      '{"items":[{"codigo":"18210-93002-000","cantidad":1},{"codigo":"18191-94410-000","cantidad":1}]} ' +
+      'Extrae TODOS los codigos visibles aunque sean muchos. ' +
+      'Si no ves ningun codigo responde exactamente: {"items":[]}';
 
     const url = GEMINI_CONFIG.API_ENDPOINT + '/' + GEMINI_CONFIG.MODEL + ':generateContent?key=' + apiKey;
     const res = UrlFetchApp.fetch(url, {
       method: 'POST', contentType: 'application/json', muteHttpExceptions: true,
       payload: JSON.stringify({
         contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mime, data: b64 } }] }],
-        generationConfig: { maxOutputTokens: 512, temperature: 0 }
+        generationConfig: { maxOutputTokens: 1024, temperature: 0 }
       })
     });
 
-    const json   = JSON.parse(res.getContentText());
-    const code   = res.getResponseCode();
+    const code = res.getResponseCode();
     if (code !== 200) return { success: false, error: 'Error Gemini ' + code, items: [] };
 
-    const texto  = (json.candidates && json.candidates[0] &&
-                    json.candidates[0].content && json.candidates[0].content.parts &&
-                    json.candidates[0].content.parts[0].text) || '{"items":[]}';
+    const json  = JSON.parse(res.getContentText());
+    const texto = (json.candidates && json.candidates[0] &&
+                   json.candidates[0].content && json.candidates[0].content.parts &&
+                   json.candidates[0].content.parts[0].text) || '';
 
-    // Extraer solo el bloque JSON, ignorar cualquier texto extra
-    const match  = texto.match(/\{[\s\S]*"items"[\s\S]*\}/);
-    if (!match) return { success: true, items: [] };
+    Logger.log('Gemini OCR respuesta: ' + texto.substring(0, 300));
 
-    // Limpiar saltos de línea y caracteres problemáticos antes de parsear
-    const limpio = match[0].replace(/[\r\n\t]/g, ' ').replace(/,\s*\}/g, '}').replace(/,\s*\]/g, ']');
+    if (!texto || texto.trim() === '') return { success: true, items: [] };
+
+    // Limpiar markdown si Gemini lo incluyó
+    const sinMarkdown = texto.replace(/```json/g,'').replace(/```/g,'').trim();
+
+    // Buscar bloque JSON
+    const match = sinMarkdown.match(/\{[\s\S]*"items"[\s\S]*\}/);
+    if (!match) {
+      Logger.log('No se encontro bloque JSON en: ' + sinMarkdown.substring(0,200));
+      return { success: true, items: [] };
+    }
+
+    const limpio = match[0].replace(/[\r\n\t]/g,' ').replace(/,\s*\}/g,'}').replace(/,\s*\]/g,']');
     let result;
     try { result = JSON.parse(limpio); }
-    catch(pe) { return { success: true, items: [] }; } // Si no parsea, devolver vacío sin error
+    catch(pe) {
+      Logger.log('Error parseando JSON: ' + limpio.substring(0,200));
+      return { success: true, items: [] };
+    }
 
     const items = (result.items || []).map(function(i) {
-      return { codigo: String(i.codigo || '').toUpperCase(), cantidad: parseInt(i.cantidad) || 1 };
+      return { codigo: String(i.codigo || '').trim().toUpperCase(), cantidad: parseInt(i.cantidad) || 1 };
     }).filter(function(i) { return i.codigo.length >= 4; });
 
+    Logger.log('Items extraidos: ' + items.length);
     return { success: true, items: items };
 
   } catch(e) {
