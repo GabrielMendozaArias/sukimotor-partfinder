@@ -1138,6 +1138,86 @@ function exportarBackupCompleto() {
   }
 }
 
+// ── DIAGNÓSTICO (ejecutar desde el editor GAS para debugear) ──
+function debugLogin() {
+  Logger.log('=== DEBUG LOGIN ===');
+
+  const props = PropertiesService.getScriptProperties();
+  const url   = props.getProperty('SUPABASE_URL');
+  const key   = props.getProperty('SUPABASE_SERVICE_KEY');
+
+  Logger.log('SUPABASE_URL configurada: ' + (url ? 'SÍ → ' + url.substring(0, 40) : 'NO ❌'));
+  Logger.log('SUPABASE_SERVICE_KEY configurada: ' + (key ? 'SÍ → ' + key.substring(0, 12) + '...' : 'NO ❌'));
+
+  if (!url || !key) {
+    Logger.log('>> Falta configurar Script Properties. Ve a Configuración del Proyecto → Propiedades de script.');
+    return;
+  }
+
+  const sb  = getSB();
+  const row = sb.getOne('usuarios',
+    'select=id,email,pin_hash,pin_salt,activo,rol' +
+    '&email=eq.' + encodeURIComponent('mendozag05@gmail.com')
+  );
+
+  Logger.log('Usuario encontrado en Supabase: ' + (row ? 'SÍ' : 'NO ❌'));
+
+  if (!row) {
+    Logger.log('>> El email mendozag05@gmail.com no existe en la tabla usuarios de Supabase.');
+    Logger.log('>> Verifica que la migración se ejecutó correctamente.');
+    return;
+  }
+
+  Logger.log('Activo: ' + row.activo);
+  Logger.log('Rol: ' + row.rol);
+  Logger.log('pin_salt presente: ' + (row.pin_salt ? 'SÍ (' + row.pin_salt.substring(0,8) + '...)' : 'NO ❌ — columna vacía'));
+  Logger.log('pin_hash presente: ' + (row.pin_hash ? 'SÍ (' + row.pin_hash.substring(0,12) + '...)' : 'NO ❌'));
+
+  if (!row.pin_salt || !row.pin_hash) {
+    Logger.log('>> pin_salt o pin_hash están vacíos. Hay que volver a migrar los PINs.');
+    return;
+  }
+
+  // Probar verificación SHA-256
+  const calculado = hashPIN('1121', row.pin_salt);
+  const coincide  = calculado.hash === row.pin_hash;
+
+  Logger.log('Hash calculado por GAS: ' + calculado.hash.substring(0, 20) + '...');
+  Logger.log('Hash guardado en Supabase: ' + row.pin_hash.substring(0, 20) + '...');
+  Logger.log('¿Coinciden? ' + (coincide ? 'SÍ ✅' : 'NO ❌ — problema de hashing'));
+
+  if (coincide) {
+    Logger.log('>> El PIN es correcto. El problema debe ser otro (sesión, rol, etc.)');
+    const result = authenticateUser('mendozag05@gmail.com', '1121');
+    Logger.log('authenticateUser() retornó: ' + JSON.stringify(result));
+  } else {
+    Logger.log('>> Los hashes no coinciden. Ejecuta fixPINs() para corregirlos.');
+  }
+}
+
+/**
+ * Si debugLogin() muestra que los hashes no coinciden,
+ * ejecuta esta función para re-hashear los PINs directamente desde GAS.
+ */
+function fixPINs() {
+  const usuarios = [
+    { email: 'mendozag05@gmail.com',       pin: '1121'   },
+    { email: 'jc@suz.com.pa',              pin: '727325' },
+    { email: 'suzukirepuesto73@gmail.com', pin: '7325'   },
+    { email: 'suzukirepuesto72@gmail.com', pin: '7225'   },
+  ];
+  const sb = getSB();
+  usuarios.forEach(u => {
+    const { hash, salt } = hashPIN(u.pin);
+    const res = sb.update('usuarios',
+      'email=eq.' + encodeURIComponent(u.email),
+      { pin_hash: hash, pin_salt: salt }
+    );
+    Logger.log((res ? 'OK' : 'Error') + ' → ' + u.email);
+  });
+  Logger.log('PINs actualizados desde GAS. Intenta iniciar sesión de nuevo.');
+}
+
 // ── WEB APP ───────────────────────────────────────────────────
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
