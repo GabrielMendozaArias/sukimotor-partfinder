@@ -833,18 +833,136 @@ function guardarEvidenciaDrive(base64Data, nombre) {
   } catch(e) { return { success: false, error: e.toString() }; }
 }
 
-// ── cleanPartCode y normalizarUbicacion (sin cambios) ──────────
-// COPIA AQUÍ LAS FUNCIONES cleanPartCode(), agregarGuionesSYM(),
-// normalizarUbicacion(), normalizarUbicacionSimple() del CODE original.
-// No interactúan con ninguna base de datos.
+// ── PROCESAMIENTO DE CÓDIGOS (sin cambios respecto al original) ─
 
-// ── HTML GENERATORS (sin cambios) ──────────────────────────────
-// COPIA AQUÍ LAS FUNCIONES:
-// generarHTMLVerificacionIndividual(), generarHTMLAuditoria(),
-// generarHTMLRecepcionCompleto(), generarHTMLConteoFisico(),
-// generarReporteAuditoriaPDF(), generarReporteVerificacionPDF(),
-// generarReporteRecepcionPDF()
-// No interactúan con Google Sheets.
+function cleanPartCode(qrData) {
+  if (!qrData || typeof qrData !== 'string') return { clean: "", isValid: false, info: "Entrada inválida" };
+  let codigo = qrData.trim();
+  codigo = codigo.replace(/'/g, '-');
+  if (codigo.includes(',')) {
+    const partes = codigo.split(',');
+    for (let parte of partes) { parte = parte.trim(); if (parte.length >= 12 && parte.length <= 15 && /^[A-Z0-9\-]{12,15}$/.test(parte.toUpperCase())) { codigo = parte.toUpperCase(); break; } }
+    if (codigo.includes(',')) { for (let parte of partes) { parte = parte.trim(); if (parte && /^[A-Z0-9\-]{5,17}$/.test(parte.toUpperCase())) { codigo = parte.toUpperCase(); break; } } }
+  }
+  if (codigo.includes('[')) codigo = codigo.split('[')[0].trim();
+  codigo = codigo.toUpperCase().replace(/\s+/g, '');
+  const pSYM17 = /^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{2}$/;
+  const pSYM14 = /^[A-Z0-9]{5}-[A-Z0-9]{3}-[A-Z0-9]{4}-[A-Z0-9]{2}$/;
+  const pSYM533= /^[A-Z0-9]{5}-[A-Z0-9]{3}-[A-Z0-9]{3}$/;
+  const pSYM5332=/^[A-Z0-9]{5}-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{2}$/;
+  const pSYM43412=/^[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{4}-[A-Z0-9]{1}-[A-Z0-9]{2}$/;
+  if (pSYM17.test(codigo)||pSYM14.test(codigo)||pSYM533.test(codigo)||pSYM5332.test(codigo)||pSYM43412.test(codigo)) {
+    let rev = false; if (codigo.length > 20) { codigo = codigo.substring(0,20); rev = true; }
+    return { clean: codigo, isValid: true, isSYM: true, manualReview: rev, info: rev ? "SYM truncado" : "SYM válido" };
+  }
+  codigo = codigo.replace(/[^A-Z0-9\-]/g,'').replace(/\-+/g,'-').replace(/^-+|-+$/g,'');
+  let rev = false; if (codigo.length > 15) { codigo = codigo.substring(0,15); rev = true; }
+  if (codigo.length < 5) return { clean: codigo, isValid: false, manualReview: true, info: "Código muy corto" };
+  return { clean: codigo, isValid: true, isSYM: false, manualReview: rev, info: rev ? "Truncado a 15 chars" : "OK" };
+}
+
+function agregarGuionesSYM(codigo) {
+  if (codigo.length === 17) { const f = `${codigo.substring(0,5)}-${codigo.substring(5,10)}-${codigo.substring(10,15)}-${codigo.substring(15,17)}`; if (/^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{2}$/.test(f)) return { esSYM: true, codigo: f }; }
+  if (codigo.length === 14) { const f = `${codigo.substring(0,5)}-${codigo.substring(5,8)}-${codigo.substring(8,12)}-${codigo.substring(12,14)}`; if (/^[A-Z0-9]{5}-[A-Z0-9]{3}-[A-Z0-9]{4}-[A-Z0-9]{2}$/.test(f)) return { esSYM: true, codigo: f }; }
+  return { esSYM: false, codigo: codigo };
+}
+
+function normalizarUbicacion(ubicacionRaw) {
+  if (!ubicacionRaw || typeof ubicacionRaw !== 'string') return { normalized: "", isValid: false, info: "Entrada inválida" };
+  let u = ubicacionRaw.trim().toUpperCase().replace(/'/g,'-');
+  const mG = u.match(/^([A-Z])-(\d+)-([A-Z])-(\d+)-([A-Z])$/);
+  if (mG) { const rack = mG[4].padStart(2,'0'); return { normalized: `${mG[1]}-${mG[2]}-${mG[3]}-${rack}-${mG[5]}`, isValid: true, info: "Formato correcto", partes: { zona:mG[1], pasillo:mG[2], anaquel:mG[3], rack, nivel:mG[5] } }; }
+  const clean = u.replace(/[-\s]/g,'');
+  const mS = clean.match(/^([A-Z])(\d+)([A-Z])(\d+)([A-Z])$/);
+  if (mS) { const rack = mS[4].padStart(2,'0'); const norm = `${mS[1]}-${mS[2]}-${mS[3]}-${rack}-${mS[5]}`; return { normalized: norm, isValid: true, info: "Normalizado", partes: { zona:mS[1], pasillo:mS[2], anaquel:mS[3], rack, nivel:mS[5] } }; }
+  return { normalized: u, isValid: false, info: "Formato no reconocido. Use: B1A01F o B-1-A-01-F", partes: null };
+}
+
+function normalizarUbicacionSimple(ubicacionRaw) { return normalizarUbicacion(ubicacionRaw).normalized; }
+
+// ── HTML / PDF GENERATORS (sin cambios respecto al original) ────
+
+function generarHTMLVerificacionIndividual(datos) {
+  try {
+    const ubicacion = datos.ubicacion || "Sin ubicación";
+    const validados = Number(datos.validados) || 0;
+    const intrusos = Array.isArray(datos.intrusos) ? datos.intrusos : [];
+    const ausentes = Array.isArray(datos.ausentes) ? datos.ausentes : [];
+    const tasaExito = Number(datos.tasaExito) || 0;
+    const usuario = datos.usuario || "Usuario desconocido";
+    const fecha = datos.fecha || new Date().toLocaleString("es-PA");
+    const codigosEsperados = Array.isArray(datos.codigosEsperados) ? datos.codigosEsperados : [];
+    const codigosEncontrados = Array.isArray(datos.codigosEncontrados) ? datos.codigosEncontrados : [];
+    const estadoColor = tasaExito >= 95 ? '#28a745' : tasaExito >= 85 ? '#ffc107' : '#dc3545';
+    const estadoIcono = tasaExito >= 95 ? '✅' : tasaExito >= 85 ? '⚠️' : '❌';
+    const codigosValidados = codigosEncontrados.filter(c => codigosEsperados.includes(c));
+    const validadosHTML = codigosValidados.length > 0 ? `<div style="margin-top:20px;"><h4 style="color:#28a745;">✅ Códigos Validados (${codigosValidados.length})</h4><div style="background:#f0fff4;padding:15px;border-radius:8px;border-left:4px solid #28a745;">${codigosValidados.slice(0,20).map(c=>`<span style="display:inline-block;background:#e8f5e9;padding:6px 12px;margin:4px;border-radius:5px;font-size:13px;font-weight:600;">${c}</span>`).join('')}${codigosValidados.length>20?`<p style="color:#666;font-size:13px;font-style:italic;">... y ${codigosValidados.length-20} más</p>`:''}</div></div>` : '';
+    const intrusosHTML = intrusos.length > 0 ? `<div style="margin-top:20px;"><h4 style="color:#dc3545;">🚨 Intrusos Detectados (${intrusos.length})</h4><div style="background:#fff5f5;padding:15px;border-radius:8px;border-left:4px solid #dc3545;">${intrusos.map(i=>`<span style="display:inline-block;background:#fff3cd;padding:6px 12px;margin:4px;border-radius:5px;font-size:13px;font-weight:700;color:#dc3545;">${i}</span>`).join('')}</div></div>` : '';
+    const ausentesHTML = ausentes.length > 0 ? `<div style="margin-top:20px;"><h4 style="color:#ffc107;">❌ Códigos Ausentes (${ausentes.length})</h4><div style="background:#fffbf0;padding:15px;border-radius:8px;border-left:4px solid #ffc107;">${ausentes.slice(0,20).map(c=>`<span style="display:inline-block;background:#fff3cd;padding:6px 12px;margin:4px;border-radius:5px;font-size:13px;font-weight:600;">${c}</span>`).join('')}${ausentes.length>20?`<p style="color:#666;font-size:13px;">... y ${ausentes.length-20} más</p>`:''}</div></div>` : '';
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Verificación ${ubicacion}</title></head><body style="font-family:'Segoe UI',Arial,sans-serif;margin:0;padding:20px;background:#f5f5f5;"><div style="max-width:800px;margin:0 auto;background:white;border-radius:12px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.1);"><div style="background:linear-gradient(135deg,${estadoColor} 0%,${estadoColor}dd 100%);color:white;padding:40px 30px;text-align:center;"><div style="font-size:64px;margin-bottom:15px;">${estadoIcono}</div><h1 style="margin:0 0 10px 0;font-size:32px;font-weight:800;">Verificación Completada</h1><h2 style="margin:0;font-size:28px;font-weight:400;">${ubicacion}</h2><div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.3);"><p style="margin:5px 0;opacity:0.9;font-size:14px;"><strong>Realizada por:</strong> ${usuario}</p><p style="margin:5px 0;opacity:0.9;font-size:14px;"><strong>Fecha:</strong> ${fecha}</p></div></div><div style="padding:30px;"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-bottom:30px;"><div style="background:#e8f5e9;padding:20px;border-radius:8px;text-align:center;border-left:4px solid #28a745;"><div style="font-size:42px;font-weight:bold;color:#28a745;line-height:1;">${validados}</div><div style="color:#2e7d32;font-size:13px;font-weight:600;">Validados</div></div><div style="background:#fff5f5;padding:20px;border-radius:8px;text-align:center;border-left:4px solid #dc3545;"><div style="font-size:42px;font-weight:bold;color:#dc3545;line-height:1;">${intrusos.length}</div><div style="color:#c82333;font-size:13px;font-weight:600;">Intrusos</div></div><div style="background:#fffbf0;padding:20px;border-radius:8px;text-align:center;border-left:4px solid #ffc107;"><div style="font-size:42px;font-weight:bold;color:#ffc107;line-height:1;">${ausentes.length}</div><div style="color:#856404;font-size:13px;font-weight:600;">Ausentes</div></div><div style="background:#e3f2fd;padding:20px;border-radius:8px;text-align:center;border-left:4px solid #1d66c3;"><div style="font-size:42px;font-weight:bold;color:#1d66c3;line-height:1;">${tasaExito.toFixed ? tasaExito.toFixed(1) : tasaExito}%</div><div style="color:#155ab5;font-size:13px;font-weight:600;">Precisión</div></div></div>${validadosHTML}${intrusosHTML}${ausentesHTML}<div style="background:#f8f9fa;padding:20px;border-radius:8px;margin-top:40px;text-align:center;border:1px solid #e0e0e0;"><p style="margin:0;color:#666;font-size:13px;">PartFinder SukiMotor Ultra — ${new Date().getFullYear()}</p></div></div></div></body></html>`;
+  } catch(e) { return `<html><body><h2>Error: ${e.message}</h2></body></html>`; }
+}
+
+function generarHTMLAuditoria(datos) {
+  const estadoColor = { 'Dañado':'#dc3545','Faltante':'#ffc107','Excedente':'#17a2b8','Sobrante':'#28a745','Mal Ubicado':'#6c757d' };
+  const color = estadoColor[datos.estado] || '#6c757d';
+  const fotosHTML = datos.fotos && datos.fotos.length > 0 ? `<div style="margin-top:20px;"><h4 style="color:#333;">📸 Evidencia Fotográfica (${datos.fotos.length})</h4><div style="background:#f8f9fa;padding:15px;border-radius:8px;">${datos.fotos.map((f,i)=>`<div style="margin:5px 0;"><a href="${f.url}" style="color:#1d66c3;">📷 Ver Foto ${i+1}: ${f.nombre}</a></div>`).join('')}</div></div>` : '';
+  return `<div style="background:linear-gradient(135deg,${color} 0%,${color}dd 100%);color:white;padding:30px;border-radius:8px;text-align:center;margin-bottom:30px;"><div style="font-size:48px;margin-bottom:15px;">🔍</div><h1 style="margin:0 0 10px 0;font-size:28px;">Auditoría Registrada</h1><h2 style="margin:0;font-size:24px;font-weight:400;">${datos.codigo}</h2><p style="margin:15px 0 0 0;opacity:0.95;"><span style="background:rgba(255,255,255,0.2);padding:8px 20px;border-radius:20px;font-weight:bold;">${datos.estado}</span></p></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-bottom:30px;"><div style="background:#f8f9fa;padding:20px;border-radius:8px;text-align:center;border-left:4px solid ${color};"><div style="font-size:14px;color:#666;margin-bottom:5px;">Estado</div><div style="font-size:20px;font-weight:bold;color:${color};">${datos.estado}</div></div><div style="background:#f8f9fa;padding:20px;border-radius:8px;text-align:center;border-left:4px solid #1d66c3;"><div style="font-size:14px;color:#666;margin-bottom:5px;">Cantidad</div><div style="font-size:28px;font-weight:bold;color:#1d66c3;">${datos.cantidad}</div></div><div style="background:#f8f9fa;padding:20px;border-radius:8px;text-align:center;border-left:4px solid #28a745;"><div style="font-size:14px;color:#666;margin-bottom:5px;">Fotos</div><div style="font-size:28px;font-weight:bold;color:#28a745;">${datos.fotos?datos.fotos.length:0}</div></div></div><div style="background:white;border:1px solid #e0e0e0;border-radius:8px;padding:20px;margin-bottom:20px;"><h4 style="margin-top:0;color:#1d66c3;">📦 Información del Repuesto</h4><table style="width:100%;"><tr><td style="padding:8px 0;color:#666;width:120px;"><strong>Código:</strong></td><td style="padding:8px 0;font-weight:bold;">${datos.codigo}</td></tr><tr><td style="padding:8px 0;color:#666;"><strong>Descripción:</strong></td><td style="padding:8px 0;">${datos.descripcion}</td></tr><tr><td style="padding:8px 0;color:#666;"><strong>Marca:</strong></td><td style="padding:8px 0;">${datos.marca}</td></tr><tr><td style="padding:8px 0;color:#666;"><strong>Ubicación:</strong></td><td style="padding:8px 0;">${datos.ubicacion}</td></tr><tr><td style="padding:8px 0;color:#666;"><strong>Auditor:</strong></td><td style="padding:8px 0;">${datos.usuario}</td></tr><tr><td style="padding:8px 0;color:#666;"><strong>Fecha:</strong></td><td style="padding:8px 0;">${datos.fecha}</td></tr></table></div>${datos.notas?`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:20px;margin-bottom:20px;"><h4 style="margin-top:0;color:#856404;">📝 Notas</h4><p style="margin:0;color:#856404;">${datos.notas}</p></div>`:''}${fotosHTML}`;
+}
+
+function generarHTMLRecepcionCompleto(id, factura, items, timestamp) {
+  const itemsHTML = items.map(item => `<tr><td>${item.codigo}</td><td>${item.cantidad||1}</td><td>${item.ubicacion||'PENDIENTE'}</td><td>${item.ubicado?'✅':'⏳'}</td></tr>`).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:15px;margin-bottom:20px;"><div style="background:#e3f2fd;padding:20px;border-radius:8px;text-align:center;"><div style="font-size:32px;font-weight:bold;color:#1d66c3;">${items.length}</div><div style="color:#666;">Items Recibidos</div></div><div style="background:#e8f5e9;padding:20px;border-radius:8px;text-align:center;"><div style="font-size:32px;font-weight:bold;color:#28a745;">${items.filter(i=>i.ubicado).length}</div><div style="color:#666;">Ubicados</div></div></div><h3>Factura: ${factura}</h3><p>ID: ${id} | Fecha: ${timestamp}</p><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1d66c3;color:white;"><th style="padding:10px;text-align:left;">Código</th><th style="padding:10px;text-align:left;">Cantidad</th><th style="padding:10px;text-align:left;">Ubicación</th><th style="padding:10px;text-align:left;">Estado</th></tr></thead><tbody>${itemsHTML}</tbody></table>`;
+}
+
+function generarHTMLConteoFisico(datos) {
+  // Maneja tanto conteo físico (esperados/contados/ausentes) como conteo referencia (referencias/lotes)
+  if (datos.referencias) {
+    const filas = datos.referencias.map(r => `<tr><td style="padding:8px;font-weight:700;">${cleanPartCode(r.codigo).clean}</td><td style="padding:8px;text-align:center;font-size:18px;font-weight:900;color:#28a745;">${r.totalFisico||0}</td><td style="padding:8px;color:#666;">${r.descripcion||''}</td></tr>`).join('');
+    return `<h2 style="color:#1d66c3;">📋 Conteo Referencia — ID: ${datos.idConteo}</h2><p><strong>Fecha:</strong> ${datos.fecha} | <strong>Usuario:</strong> ${datos.usuario}</p><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1d66c3;color:white;"><th style="padding:10px;text-align:left;">Código</th><th style="padding:10px;text-align:center;">Cant. Física</th><th style="padding:10px;text-align:left;">Descripción</th></tr></thead><tbody>${filas}</tbody></table>`;
+  }
+  if (datos.lotes) {
+    const filas = datos.lotes.map(l => `<tr><td style="padding:8px;font-weight:700;">${l.codigo}</td><td style="padding:8px;">${l.ubicacion||'-'}</td><td style="padding:8px;text-align:center;">${l.cant_sistema||0}</td><td style="padding:8px;text-align:center;">${l.cant_fisica||0}</td><td style="padding:8px;text-align:center;color:${(l.sobrante||0)>0?'#28a745':(l.faltante||0)>0?'#dc3545':'#666'};">${(l.sobrante||0)>0?'+'+l.sobrante:(l.faltante||0)>0?'-'+l.faltante:'=0'}</td></tr>`).join('');
+    return `<h2 style="color:#1d66c3;">📊 Reporte Lotes Conteo Físico</h2><p><strong>Usuario:</strong> ${datos.usuario}</p><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1d66c3;color:white;"><th style="padding:10px;">Código</th><th style="padding:10px;">Ubicación</th><th style="padding:10px;">Sistema</th><th style="padding:10px;">Físico</th><th style="padding:10px;">Diferencia</th></tr></thead><tbody>${filas}</tbody></table>`;
+  }
+  const ausentes = datos.ausentes||[]; const noEsperados = datos.noEsperados||[]; const contados = datos.contados||[]; const esperados = datos.esperados||[];
+  return `<h2 style="color:#1d66c3;">🔢 Conteo Físico — ${datos.ubicacion||''}</h2><p><strong>Fecha:</strong> ${datos.fecha} | <strong>Usuario:</strong> ${datos.usuario} | <strong>ID:</strong> ${datos.id}</p><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin:20px 0;"><div style="background:#e3f2fd;padding:15px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:bold;color:#1d66c3;">${esperados.length}</div><div>Esperados</div></div><div style="background:#e8f5e9;padding:15px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:bold;color:#28a745;">${contados.filter(c=>esperados.includes(c)).length}</div><div>Contados</div></div><div style="background:#ffebee;padding:15px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:bold;color:#dc3545;">${ausentes.length}</div><div>Ausentes</div></div><div style="background:#fff3e0;padding:15px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:bold;color:#e65100;">${noEsperados.length}</div><div>No Esperados</div></div></div>`;
+}
+
+function generarReporteAuditoriaPDF(datos, carpetaDestino) {
+  try {
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;margin:40px;color:#333;}.header{background:linear-gradient(135deg,#dc3545 0%,#c82333 100%);color:white;padding:30px;border-radius:10px;margin-bottom:30px;}.section{background:#f8f9fa;border-radius:8px;padding:20px;margin-bottom:20px;border-left:4px solid #dc3545;}.info-grid{display:grid;grid-template-columns:150px 1fr;gap:10px;}.label{font-weight:bold;color:#666;}.footer{margin-top:40px;text-align:center;color:#999;font-size:12px;border-top:1px solid #eee;padding-top:20px;}</style></head><body><div class="header"><h1>🔍 Reporte de Auditoría</h1><p>ID: ${datos.id}</p><p>Fecha: ${datos.fecha}</p></div><div class="section"><h3>📦 Información del Repuesto</h3><div class="info-grid"><span class="label">Código:</span><span style="font-weight:bold;font-size:18px;">${datos.codigo}</span><span class="label">Descripción:</span><span>${datos.descripcion}</span><span class="label">Marca:</span><span>${datos.marca}</span><span class="label">Ubicación:</span><span>${datos.ubicacion}</span></div></div><div class="section"><h3>📋 Resultado</h3><div class="info-grid"><span class="label">Estado:</span><span style="font-weight:bold;color:#dc3545;">${datos.estado}</span><span class="label">Cantidad:</span><span style="font-size:24px;font-weight:bold;">${datos.cantidad}</span><span class="label">Auditor:</span><span>${datos.usuario}</span></div>${datos.notas?`<div style="background:#fff3cd;border:1px solid #ffc107;padding:15px;border-radius:8px;margin-top:20px;"><strong>📝 Notas:</strong><br>${datos.notas}</div>`:''}</div>${datos.fotos&&datos.fotos.length>0?`<div class="section"><h3>📸 Evidencia Fotográfica (${datos.fotos.length})</h3>${datos.fotos.map((f,i)=>`<div style="margin:10px 0;padding:10px;background:white;border-radius:5px;">📷 Foto ${i+1}: <a href="${f.url}">${f.nombre}</a></div>`).join('')}</div>`:''}<div class="footer"><p>PartFinder SukiMotor Ultra</p><p>Reporte generado el ${datos.fecha}</p></div></body></html>`;
+    const blob = Utilities.newBlob(html,'text/html','reporte.html');
+    const pdf  = blob.getAs('application/pdf').setName(`${datos.id}_Reporte.pdf`);
+    const file = carpetaDestino.createFile(pdf);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch(e) { Logger.log('PDF auditoria error: '+e); return ''; }
+}
+
+function generarReporteVerificacionPDF(datos, carpetaDestino) {
+  try {
+    const col = datos.tasaExito>=95?'#28a745':datos.tasaExito>=85?'#ffc107':'#dc3545';
+    const codigosValidados = (datos.codigosEncontrados||[]).filter(c=>(datos.codigosEsperados||[]).includes(c));
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;margin:40px;color:#333;}.header{background:linear-gradient(135deg,${col} 0%,${col}dd 100%);color:white;padding:30px;border-radius:10px;margin-bottom:30px;text-align:center;}.section{background:#f8f9fa;border-radius:8px;padding:20px;margin-bottom:20px;}.stat-box{display:inline-block;background:white;padding:15px 25px;border-radius:8px;margin:10px;text-align:center;border-left:4px solid ${col};}.stat-value{font-size:32px;font-weight:bold;color:${col};}.codigo-item{display:inline-block;background:#e8f5e9;padding:5px 10px;margin:3px;border-radius:5px;font-size:13px;}</style></head><body><div class="header"><h1>✅ Reporte de Verificación</h1><h2>${datos.ubicacion}</h2><p>${datos.fecha}</p></div><div style="text-align:center;margin-bottom:30px;"><div class="stat-box"><div class="stat-value">${datos.validados}</div><div style="color:#666;font-size:12px;">Validados</div></div><div class="stat-box"><div class="stat-value">${(datos.intrusos||[]).length}</div><div style="color:#666;font-size:12px;">Intrusos</div></div><div class="stat-box"><div class="stat-value">${(datos.ausentes||[]).length}</div><div style="color:#666;font-size:12px;">Ausentes</div></div><div class="stat-box"><div class="stat-value">${datos.tasaExito}%</div><div style="color:#666;font-size:12px;">Precisión</div></div></div>${codigosValidados.length>0?`<div class="section"><h3>✅ Códigos Validados (${codigosValidados.length})</h3>${codigosValidados.map(c=>`<span class="codigo-item">${c}</span>`).join('')}</div>`:''} ${(datos.intrusos||[]).length>0?`<div class="section"><h3 style="color:#dc3545;">🚨 Intrusos (${datos.intrusos.length})</h3>${datos.intrusos.map(c=>`<span class="codigo-item" style="background:#fff3cd;">${c}</span>`).join('')}</div>`:''}${(datos.ausentes||[]).length>0?`<div class="section"><h3 style="color:#ffc107;">❌ Ausentes (${datos.ausentes.length})</h3>${datos.ausentes.map(c=>`<span class="codigo-item" style="background:#f8d7da;">${c}</span>`).join('')}</div>`:''}</body></html>`;
+    const blob = Utilities.newBlob(html,'text/html','reporte.html');
+    const pdf  = blob.getAs('application/pdf').setName(`${datos.id}_Reporte.pdf`);
+    const file = carpetaDestino.createFile(pdf);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch(e) { Logger.log('PDF verificacion error: '+e); return ''; }
+}
+
+function generarReporteRecepcionPDF(datos, carpetaDestino) {
+  try {
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;margin:40px;color:#333;}.header{background:linear-gradient(135deg,#1d66c3 0%,#155ab5 100%);color:white;padding:30px;border-radius:10px;margin-bottom:30px;text-align:center;}table{width:100%;border-collapse:collapse;margin-top:20px;}th{background:#1d66c3;color:white;padding:12px;text-align:left;}td{padding:10px;border-bottom:1px solid #e0e0e0;}tr:nth-child(even){background:#f8f9fa;}</style></head><body><div class="header"><h1>📦 Reporte de Recepción</h1><h2>Factura: ${datos.factura}</h2><p>${datos.fecha}</p></div><table><thead><tr><th>Código</th><th>Cantidad</th><th>Ubicación</th><th>Estado</th></tr></thead><tbody>${datos.items.map(item=>`<tr><td><strong>${item.codigo}</strong></td><td>${item.cantidad||1}</td><td>${item.ubicacion||'PENDIENTE'}</td><td>${item.ubicado?'✅ Ubicado':'⏳ Pendiente'}</td></tr>`).join('')}</tbody></table></body></html>`;
+    const blob = Utilities.newBlob(html,'text/html','reporte.html');
+    const pdf  = blob.getAs('application/pdf').setName(`${datos.id}_Reporte.pdf`);
+    const file = carpetaDestino.createFile(pdf);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch(e) { Logger.log('PDF recepcion error: '+e); return ''; }
+}
 
 // ── WEB APP ───────────────────────────────────────────────────
 function doGet() {
