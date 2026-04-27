@@ -760,24 +760,56 @@ PROHIBIDO mencionar autos, camiones, vehículos de 4 ruedas.`;
 
 function procesarImagenOrden(imagenBase64) {
   try {
+    if (!imagenBase64 || imagenBase64.length < 50)
+      return { success: false, error: 'Imagen no recibida', items: [] };
+
     const apiKey = obtenerAPIKeyGemini();
     const b64    = imagenBase64.includes(',') ? imagenBase64.split(',')[1] : imagenBase64;
     const mime   = imagenBase64.startsWith('data:') ? imagenBase64.split(';')[0].replace('data:','') : 'image/jpeg';
-    const prompt = `Eres un experto en inventario de repuestos de motos. Analiza esta imagen de una orden de despacho y extrae TODOS los códigos de repuestos y sus cantidades.
-Devuelve SOLO JSON válido: {"items":[{"codigo":"XXXX-XXXX","cantidad":1}]}
-Si no hay códigos claros: {"items":[]}`;
+
+    const prompt = 'Analiza esta imagen de una orden o lista de repuestos de motos. ' +
+      'Extrae los codigos de repuesto y cantidades. ' +
+      'Responde UNICAMENTE con JSON valido sin markdown: ' +
+      '{"items":[{"codigo":"18137-93J01","cantidad":2}]} ' +
+      'Si no hay codigos claros responde: {"items":[]}';
 
     const url = GEMINI_CONFIG.API_ENDPOINT + '/' + GEMINI_CONFIG.MODEL + ':generateContent?key=' + apiKey;
     const res = UrlFetchApp.fetch(url, {
       method: 'POST', contentType: 'application/json', muteHttpExceptions: true,
-      payload: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mime, data: b64 } }] }], generationConfig: { maxOutputTokens: 1024, temperature: 0.1 } })
+      payload: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mime, data: b64 } }] }],
+        generationConfig: { maxOutputTokens: 512, temperature: 0 }
+      })
     });
-    const json    = JSON.parse(res.getContentText());
-    const texto   = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '{"items":[]}';
-    const limpio  = texto.replace(/```json|```/g,'').trim();
-    const result  = JSON.parse(limpio);
-    return { success: true, items: result.items || [] };
-  } catch(e) { return { success: false, error: e.toString(), items: [] }; }
+
+    const json   = JSON.parse(res.getContentText());
+    const code   = res.getResponseCode();
+    if (code !== 200) return { success: false, error: 'Error Gemini ' + code, items: [] };
+
+    const texto  = (json.candidates && json.candidates[0] &&
+                    json.candidates[0].content && json.candidates[0].content.parts &&
+                    json.candidates[0].content.parts[0].text) || '{"items":[]}';
+
+    // Extraer solo el bloque JSON, ignorar cualquier texto extra
+    const match  = texto.match(/\{[\s\S]*"items"[\s\S]*\}/);
+    if (!match) return { success: true, items: [] };
+
+    // Limpiar saltos de línea y caracteres problemáticos antes de parsear
+    const limpio = match[0].replace(/[\r\n\t]/g, ' ').replace(/,\s*\}/g, '}').replace(/,\s*\]/g, ']');
+    let result;
+    try { result = JSON.parse(limpio); }
+    catch(pe) { return { success: true, items: [] }; } // Si no parsea, devolver vacío sin error
+
+    const items = (result.items || []).map(function(i) {
+      return { codigo: String(i.codigo || '').toUpperCase(), cantidad: parseInt(i.cantidad) || 1 };
+    }).filter(function(i) { return i.codigo.length >= 4; });
+
+    return { success: true, items: items };
+
+  } catch(e) {
+    // Devolver mensaje genérico — nunca incluir el error original que puede romper JSON
+    return { success: false, error: 'Error al procesar imagen. Usa entrada manual.', items: [] };
+  }
 }
 
 // ── EMAIL MANAGER (lee destinatarios de Supabase) ─────────────
