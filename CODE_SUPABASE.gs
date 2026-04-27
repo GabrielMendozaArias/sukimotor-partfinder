@@ -30,13 +30,20 @@ class SupabaseClient {
   constructor() {
     const p = PropertiesService.getScriptProperties();
     this.base = p.getProperty('SUPABASE_URL') + '/rest/v1';
-    this.key  = p.getProperty('SUPABASE_SERVICE_KEY');
+    // GAS usa la anon/publishable key — la service key es bloqueada por Supabase
+    // Las operaciones privilegiadas usan funciones SECURITY DEFINER via /rpc/
+    this.key  = p.getProperty('SUPABASE_ANON_KEY');
     this.hdrs = {
       'apikey':        this.key,
       'Authorization': 'Bearer ' + this.key,
       'Content-Type':  'application/json',
       'Prefer':        'return=representation'
     };
+  }
+
+  // Llamar a una función PostgreSQL (SECURITY DEFINER bypasea RLS)
+  rpc(fn, params) {
+    return this._req('/rpc/' + fn, 'POST', params || {});
   }
 
   _req(path, method, body, extraHeaders) {
@@ -152,11 +159,10 @@ class SessionManager {
 // ── AUTENTICACIÓN ────────────────────────────────────────────
 function authenticateUser(email, pin) {
   try {
-    const sb  = getSB();
-    const row = sb.getOne('usuarios',
-      'select=id,email,nombre,rol,pin_hash,pin_salt,activo,permisos' +
-      '&email=eq.' + encodeURIComponent(email.toLowerCase().trim())
-    );
+    const sb   = getSB();
+    // Usamos RPC (SECURITY DEFINER) para leer usuarios sin exponer la tabla directamente
+    const rows = sb.rpc('get_user_for_auth', { p_email: email.toLowerCase().trim() });
+    const row  = Array.isArray(rows) ? rows[0] : rows;
     if (!row || !row.activo) return { success: false, message: 'Credenciales inválidas' };
     if (!verifyPIN(pin.toString(), row.pin_hash, row.pin_salt))
       return { success: false, message: 'Credenciales inválidas' };
@@ -1144,21 +1150,19 @@ function debugLogin() {
 
   const props = PropertiesService.getScriptProperties();
   const url   = props.getProperty('SUPABASE_URL');
-  const key   = props.getProperty('SUPABASE_SERVICE_KEY');
+  const key   = props.getProperty('SUPABASE_ANON_KEY');
 
   Logger.log('SUPABASE_URL configurada: ' + (url ? 'SÍ → ' + url.substring(0, 40) : 'NO ❌'));
-  Logger.log('SUPABASE_SERVICE_KEY configurada: ' + (key ? 'SÍ → ' + key.substring(0, 12) + '...' : 'NO ❌'));
+  Logger.log('SUPABASE_ANON_KEY configurada: ' + (key ? 'SÍ → ' + key.substring(0, 20) + '...' : 'NO ❌'));
 
   if (!url || !key) {
     Logger.log('>> Falta configurar Script Properties. Ve a Configuración del Proyecto → Propiedades de script.');
     return;
   }
 
-  const sb  = getSB();
-  const row = sb.getOne('usuarios',
-    'select=id,email,pin_hash,pin_salt,activo,rol' +
-    '&email=eq.' + encodeURIComponent('mendozag05@gmail.com')
-  );
+  const sb   = getSB();
+  const rows = sb.rpc('get_user_for_auth', { p_email: 'mendozag05@gmail.com' });
+  const row  = Array.isArray(rows) ? rows[0] : rows;
 
   Logger.log('Usuario encontrado en Supabase: ' + (row ? 'SÍ' : 'NO ❌'));
 
@@ -1209,13 +1213,11 @@ function fixPINs() {
   const sb = getSB();
   usuarios.forEach(u => {
     const { hash, salt } = hashPIN(u.pin);
-    const res = sb.update('usuarios',
-      'email=eq.' + encodeURIComponent(u.email),
-      { pin_hash: hash, pin_salt: salt }
-    );
-    Logger.log((res ? 'OK' : 'Error') + ' → ' + u.email);
+    // Usar RPC SECURITY DEFINER para actualizar — la anon key no puede escribir usuarios directamente
+    const res = sb.rpc('update_user_pin', { p_email: u.email, p_pin_hash: hash, p_pin_salt: salt });
+    Logger.log((res !== null ? 'OK' : 'Error') + ' → ' + u.email + ' | hash: ' + hash.substring(0,12) + '...');
   });
-  Logger.log('PINs actualizados desde GAS. Intenta iniciar sesión de nuevo.');
+  Logger.log('fixPINs completado. Ejecuta debugLogin() para verificar.');
 }
 
 // ── WEB APP ───────────────────────────────────────────────────
