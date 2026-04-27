@@ -964,6 +964,180 @@ function generarReporteRecepcionPDF(datos, carpetaDestino) {
   } catch(e) { Logger.log('PDF recepcion error: '+e); return ''; }
 }
 
+// ── EXPORTAR INVENTARIO A GOOGLE SHEETS ──────────────────────
+/**
+ * Exporta todo el inventario de Supabase a un Google Sheet nuevo.
+ * Ejecutar manualmente desde el editor de GAS o desde un botón en la UI.
+ * Devuelve la URL del Sheet generado.
+ */
+function exportarInventarioASheet() {
+  try {
+    Logger.log('Iniciando exportación de inventario...');
+    const sb = getSB();
+
+    // 1. Obtener todas las partes con ubicaciones y marca
+    let todas = [];
+    let offset = 0;
+    const limite = 1000;
+
+    while (true) {
+      const lote = sb.get('partes',
+        'select=codigo,descripcion,gemini_descripcion,updated_at,' +
+        'marcas(nombre),' +
+        'parte_ubicaciones(orden,ubicaciones(codigo_ubicacion))' +
+        '&activo=eq.true' +
+        '&order=codigo.asc' +
+        '&limit=' + limite + '&offset=' + offset
+      );
+      if (!lote || lote.length === 0) break;
+      todas = todas.concat(lote);
+      if (lote.length < limite) break;
+      offset += limite;
+    }
+
+    Logger.log('Total partes obtenidas: ' + todas.length);
+
+    // 2. Crear nuevo Google Sheet
+    const fecha    = Utilities.formatDate(new Date(), 'GMT-5', 'yyyy-MM-dd_HHmm');
+    const nombre   = 'Inventario_SukiMotor_' + fecha;
+    const sheet    = SpreadsheetApp.create(nombre);
+    const hoja     = sheet.getActiveSheet();
+    hoja.setName('Inventario');
+
+    // 3. Encabezados (formato idéntico al original)
+    const headers = [
+      'Código', 'Descripción', 'Marca',
+      'Ubicación Principal', 'Ubicación 2', 'Ubicación 3',
+      'Ubicación 4', 'Ubicación 5', 'Último Inventario'
+    ];
+    hoja.getRange(1, 1, 1, headers.length).setValues([headers]);
+    hoja.getRange(1, 1, 1, headers.length)
+      .setBackground('#1d66c3')
+      .setFontColor('#ffffff')
+      .setFontWeight('bold');
+    hoja.setFrozenRows(1);
+
+    // 4. Convertir datos y escribir en lotes de 500 filas
+    const filas = todas.map(p => {
+      const row   = sbToRow(p);
+      const ultInv = p.updated_at
+        ? Utilities.formatDate(new Date(p.updated_at), 'GMT-5', 'dd/MM/yyyy')
+        : '';
+      return [
+        row['Código'],
+        row['Descripción'],
+        row['Marca'],
+        row['Ubicación Principal'],
+        row['Ubicación 2'],
+        row['Ubicación 3'],
+        row['Ubicación 4'],
+        row['Ubicación 5'],
+        ultInv
+      ];
+    });
+
+    const tamLote = 500;
+    for (let i = 0; i < filas.length; i += tamLote) {
+      const lote = filas.slice(i, i + tamLote);
+      hoja.getRange(i + 2, 1, lote.length, headers.length).setValues(lote);
+    }
+
+    // 5. Formato final
+    hoja.autoResizeColumns(1, headers.length);
+    hoja.getRange(2, 1, filas.length, 1).setFontWeight('bold'); // Columna Código en negrita
+
+    // 6. Agregar hoja de resumen
+    const resumen = sheet.insertSheet('Resumen');
+    const conUbic = filas.filter(f => f[3] && f[3].trim()).length;
+    resumen.getRange('A1:B6').setValues([
+      ['Exportación PartFinder SukiMotor', ''],
+      ['Fecha',              Utilities.formatDate(new Date(), 'GMT-5', 'dd/MM/yyyy HH:mm')],
+      ['Total partes',       filas.length],
+      ['Con ubicación',      conUbic],
+      ['Sin ubicación',      filas.length - conUbic],
+      ['% Ubicados',         filas.length > 0 ? ((conUbic / filas.length) * 100).toFixed(1) + '%' : '0%']
+    ]);
+    resumen.getRange('A1:B1').merge().setBackground('#1d66c3').setFontColor('#fff').setFontWeight('bold');
+    resumen.getRange('A2:A6').setFontWeight('bold');
+    resumen.autoResizeColumns(1, 2);
+
+    const url = sheet.getUrl();
+    Logger.log('Exportación completada: ' + url);
+    Logger.log('Total filas: ' + filas.length);
+
+    return {
+      success: true,
+      url: url,
+      nombre: nombre,
+      totalPartes: filas.length,
+      conUbicacion: conUbic,
+      sinUbicacion: filas.length - conUbic
+    };
+
+  } catch(e) {
+    Logger.log('Error en exportarInventarioASheet: ' + e.toString());
+    return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * Exportar también usuarios y ubicaciones para backup completo
+ */
+function exportarBackupCompleto() {
+  try {
+    const sb    = getSB();
+    const fecha = Utilities.formatDate(new Date(), 'GMT-5', 'yyyy-MM-dd_HHmm');
+    const sheet = SpreadsheetApp.create('Backup_SukiMotor_' + fecha);
+
+    // ── Inventario ──
+    const partes = sb.get('partes',
+      'select=codigo,descripcion,gemini_descripcion,marcas(nombre),' +
+      'parte_ubicaciones(orden,ubicaciones(codigo_ubicacion))' +
+      '&activo=eq.true&order=codigo.asc&limit=30000'
+    ) || [];
+    const hInv = sheet.getActiveSheet();
+    hInv.setName('Inventario');
+    hInv.getRange(1,1,1,9).setValues([['Código','Descripción','Marca','Ubicación 1','Ubicación 2','Ubicación 3','Ubicación 4','Ubicación 5','Descripción AI']]);
+    hInv.getRange(1,1,1,9).setBackground('#1d66c3').setFontColor('#fff').setFontWeight('bold');
+    if (partes.length > 0) {
+      const filas = partes.map(p => {
+        const r = sbToRow(p);
+        return [r['Código'],r['Descripción'],r['Marca'],r['Ubicación Principal'],r['Ubicación 2'],r['Ubicación 3'],r['Ubicación 4'],r['Ubicación 5'],p.gemini_descripcion||''];
+      });
+      hInv.getRange(2,1,filas.length,9).setValues(filas);
+    }
+
+    // ── Ubicaciones ──
+    const ubics = sb.get('ubicaciones', 'select=codigo_ubicacion,zona,pasillo,anaquel,rack,nivel,estado&order=codigo_ubicacion.asc&limit=5000') || [];
+    const hUbic = sheet.insertSheet('Ubicaciones');
+    hUbic.getRange(1,1,1,7).setValues([['Código','Zona','Pasillo','Anaquel','Rack','Nivel','Estado']]);
+    hUbic.getRange(1,1,1,7).setBackground('#28a745').setFontColor('#fff').setFontWeight('bold');
+    if (ubics.length > 0) {
+      hUbic.getRange(2,1,ubics.length,7).setValues(ubics.map(u=>[u.codigo_ubicacion,u.zona||'',u.pasillo||'',u.anaquel||'',u.rack||'',u.nivel||'',u.estado||'']));
+    }
+
+    // ── Usuarios (sin hashes) ──
+    const users = sb.get('usuarios', 'select=email,nombre,rol,activo,created_at&order=email.asc') || [];
+    const hUser = sheet.insertSheet('Usuarios');
+    hUser.getRange(1,1,1,5).setValues([['Email','Nombre','Rol','Activo','Creado']]);
+    hUser.getRange(1,1,1,5).setBackground('#dc3545').setFontColor('#fff').setFontWeight('bold');
+    if (users.length > 0) {
+      hUser.getRange(2,1,users.length,5).setValues(users.map(u=>[u.email,u.nombre||'',u.rol,u.activo?'Sí':'No',u.created_at?u.created_at.substring(0,10):'']));
+    }
+
+    [hInv, hUbic, hUser].forEach(h => h.autoResizeColumns(1, h.getLastColumn()));
+    sheet.setActiveSheet(hInv);
+
+    const url = sheet.getUrl();
+    Logger.log('Backup completo: ' + url);
+    return { success: true, url, partes: partes.length, ubicaciones: ubics.length, usuarios: users.length };
+
+  } catch(e) {
+    Logger.log('Error backup: ' + e.toString());
+    return { success: false, message: e.toString() };
+  }
+}
+
 // ── WEB APP ───────────────────────────────────────────────────
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
